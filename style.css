@@ -154,7 +154,14 @@ button.tile:hover { background: var(--cream); }
 .cdate { margin-left: auto; font-size: 12px; color: var(--navy); }
 .ctitle { font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
 .ctext { font-size: 14px; color: var(--navy); white-space: pre-line; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
-.cfoot { display: flex; align-items: center; gap: 10px; padding: 0 14px 12px; }
+.cfoot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 0 14px 12px; }
+.cfoot .tick { margin-left: auto; }
+.npill { display: inline-flex; align-items: center; min-height: 32px; padding: 0 12px; border-radius: 99px; border: 1.5px solid var(--navy); background: #fff; font-size: 12px; font-weight: 600; color: var(--navy); cursor: pointer; text-decoration: none; white-space: nowrap; }
+button.npill:hover { background: var(--cream); }
+.npill.wait { border-style: dashed; cursor: default; font-weight: 400; }
+.npill.bad { border-color: var(--orange); color: var(--orange); }
+.npill.in { border-color: var(--yellow); background: var(--cream); }
+.npill.in:hover { background: var(--yellow); }
 .ctags { display: flex; flex-wrap: wrap; gap: 4px 8px; flex: 1; min-width: 0; }
 .ctag { border: 0; background: none; padding: 2px 0; font-size: 13px; font-weight: 600; color: var(--orange); cursor: pointer; }
 .ctag:hover { text-decoration: underline; }

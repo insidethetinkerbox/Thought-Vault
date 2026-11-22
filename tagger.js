@@ -26,6 +26,8 @@
       words: 'tax taxes gst iras accounts accountant bank receipt receipts expense expenses budget cost costs profit revenue spreadsheet bill bills insurance registration acra cpf invoice invoices subscription renew renewal' },
     { id: 'life', name: 'Home & life', short: 'Life',
       words: 'family mum mom dad husband partner kids kid son daughter home house flat doctor dentist clinic health sleep gym walk run holiday trip birthday gift friend friends groceries grocery dinner lunch cook cooking clean cleaning laundry weekend' },
+    { id: 'dog', name: 'Dog', short: 'Dog',
+      words: 'dog dogs puppy pup vet vets jab jabs vaccination vaccine flea fleas tick ticks groom groomer grooming walkies kibble boarding staycation leash harness treats whiskey' },
     { id: 'learning', name: 'Learning & inspiration', short: 'Learning',
       words: 'book books read reading course courses class tutorial podcast article learn learned learnt inspiration inspired museum exhibition quote documentary research skill technique' },
   ];
@@ -114,11 +116,14 @@
   function guessShelf(text, shelves, model) {
     const toks = tokens(text);
     const scores = {};
+    // Names (capitalised mid-sentence, like Whiskey or Luna Wolf) are more telling than everyday words like "cook".
+    const names = new Set();
+    for (const m of String(text || '').matchAll(/(?<=[^.!?\n\s]\s+)[A-Z][a-z]+/g)) names.add(stem(m[0].toLowerCase()));
     const firstAt = {};
     for (const s of shelves) {
       const kw = s._kw || (s._kw = wordSet(s.words + ' ' + s.name));
       let n = 0;
-      toks.forEach((w, i) => { if (kw.has(w)) { n += 2; if (!(s.id in firstAt)) firstAt[s.id] = i; } });
+      toks.forEach((w, i) => { if (kw.has(w)) { n += names.has(w) ? 3 : 2; if (!(s.id in firstAt)) firstAt[s.id] = i; } });
       scores[s.id] = n;
     }
     if (model) {

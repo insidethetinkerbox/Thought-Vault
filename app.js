@@ -66,6 +66,7 @@
       tags: Array.isArray(t.tags) ? t.tags.map(T.slug).filter(Boolean) : [],
       pinned: !!t.pinned, done: !!t.done, archived: !!t.archived,
       created: t.created || now(), updated: t.updated || t.created || now(),
+      notion: String(t.notion || ''), // '' · 'pending' · a Notion page id · 'error: …'
     };
   }
 
@@ -263,6 +264,7 @@
       </button>`;
     if (t.tags.length || isTodo) {
       h += `<div class="cfoot"><div class="ctags">${t.tags.map((x) => `<button type="button" class="ctag" data-tag="${esc(x)}">#${esc(x)}</button>`).join('')}</div>`;
+      if (isTodo && notionOn()) h += notionPill(t);
       if (isTodo) h += `<button type="button" class="tick" data-tick="${esc(t.id)}" aria-pressed="${t.done}" aria-label="${t.done ? 'Mark as not done' : 'Mark as done'}" title="${t.done ? 'Done. Tap to undo' : 'Mark as done'}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg></button>`;
       h += `</div>`;
     }
@@ -272,6 +274,15 @@
         `</div></div>`;
     }
     return h + `</article>`;
+  }
+
+  // The Send to Notion button on a to-do, or where it's up to.
+  function notionPill(t) {
+    const n = t.notion;
+    if (!n) return `<button type="button" class="npill" data-notion="${esc(t.id)}">Send to Notion</button>`;
+    if (n === 'pending') return `<span class="npill wait">Sending to Notion…</span>`;
+    if (n.startsWith('error')) return `<button type="button" class="npill bad" data-notion="${esc(t.id)}" title="${esc(n.replace(/^error:\s*/, ''))}">Didn’t reach Notion · try again</button>`;
+    return `<a class="npill in" href="https://www.notion.so/${esc(n.replace(/-/g, ''))}" target="_blank" rel="noopener">In Notion ↗</a>`;
   }
 
   function sectionHTML(id, name, list, note) {
@@ -319,13 +330,22 @@
       toast(`Moved to ${s.name}. I’ll remember that.`);
       return;
     }
+    const toNotion = e.target.closest('[data-notion]');
+    if (toNotion) {
+      const t = state.thoughts.find((x) => x.id === toNotion.dataset.notion);
+      if (!t) return;
+      t.notion = 'pending'; t.updated = now();
+      save(); render(); syncSoon(0);
+      toast('Sending to your Command Centre…');
+      return;
+    }
     const tick = e.target.closest('[data-tick]');
     if (tick) {
       const t = state.thoughts.find((x) => x.id === tick.dataset.tick);
       if (!t) return;
       t.done = !t.done; t.updated = now();
       save(); render();
-      if (t.done) toast('Done. Nice one.');
+      if (t.done) toast(t.notion && /^[0-9a-f-]{32,36}$/i.test(t.notion) ? 'Done. Ticked in Notion too.' : 'Done. Nice one.');
       return;
     }
     const tag = e.target.closest('[data-tag]');
@@ -594,6 +614,7 @@
   const SHELF_SYNCED_KEY = 'tv-shelves-synced';
   const PASS_KEY = 'tv-pass';
   const LAST_KEY = 'tv-last-sync';
+  const NOTION_KEY = 'tv-notion-on';
   const sync = {
     pass: API ? store.get(PASS_KEY, '') : '',
     synced: store.get(SYNCED_KEY, {}) || {},
@@ -601,6 +622,8 @@
     status: 'idle', last: store.get(LAST_KEY, ''), error: '',
   };
   function syncOn() { return !!API && !!sync.pass; }
+  // The Sheet says whether Notion is set up; remembered so the buttons show straight away next time.
+  function notionOn() { return syncOn() && store.get(NOTION_KEY, false) === true; }
   function isLocked() { return !!API && !sync.pass; }
   function syncSoon(ms) { if (!syncOn()) return; clearTimeout(sync.timer); sync.timer = setTimeout(runSync, ms == null ? 1200 : ms); }
 
@@ -662,6 +685,7 @@
 
   function mergeFromSheet(r, sentShelfUpd) {
     let changed = false;
+    if (!!r.notion !== notionOn()) { store.set(NOTION_KEY, !!r.notion); changed = true; }
     // Shelves first, so thoughts on a shelf made on another device keep their shelf.
     const sh = r.shelves;
     if (sh && Array.isArray(sh.list) && sh.updated > store.get(SHELF_UPD_KEY, '')) {
@@ -862,6 +886,13 @@
   // ---------- Start ----------
   state.shelves = (store.get(SHELF_KEY, null) || cloneDefaults()).filter((s) => s && s.id && s.name);
   if (!state.shelves.length) state.shelves = cloneDefaults();
+  // New starting shelves (like Dog) also appear for anyone who had already customised their shelves.
+  const ADDED_KEY = 'tv-shelves-added';
+  const added = store.get(ADDED_KEY, []) || [];
+  const NEW_SHELVES = ['dog']; // shelves added to the starting set after launch
+  const missing = cloneDefaults().filter((d) => NEW_SHELVES.includes(d.id) && !added.includes(d.id) && !state.shelves.some((s) => s.id === d.id));
+  store.set(ADDED_KEY, NEW_SHELVES);
+  if (missing.length && store.get(SHELF_KEY, null)) { state.shelves = state.shelves.concat(missing); saveShelves(); }
   state.thoughts = (store.get(KEY, []) || []).map(normalise);
   derive();
   fillShelfSelect($('#capShelf'));
