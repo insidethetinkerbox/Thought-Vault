@@ -113,6 +113,7 @@
     cap.tags = []; cap.userTags = []; cap.removed = new Set();
     $('#capShelf').value = '';
     $('#capKind').value = 'idea';
+    $('#capNotion').checked = false;
     $('#fileBtn').disabled = true;
     updateCapSuggest();
   }
@@ -122,17 +123,23 @@
     if (!text) return;
     updateCapSuggest();
     const shelf = $('#capShelf').value;
+    const toNotion = syncOn() && $('#capNotion').checked;
     const t = normalise({
       text, shelf, shelfBy: shelf ? 'you' : 'auto',
-      kind: $('#capKind').value, tags: cap.tags,
+      kind: toNotion ? 'todo' : $('#capKind').value, tags: cap.tags,
+      notion: toNotion ? 'pending' : '',
       created: now(), updated: now(),
     });
     state.thoughts.unshift(t);
     save();
     resetCapture();
     render();
+    if (toNotion) syncSoon(0);
     const s = shelfById(t.shelf);
-    toast(s ? `Filed on ${s.name}` : 'Filed in Unsorted. Pick a shelf when you’re ready.', false, () => {
+    const where = s ? `Filed on ${s.name}` : 'Filed in Unsorted';
+    const msg = toNotion ? `${where} and sending to Notion`
+      : s ? where : 'Filed in Unsorted. Pick a shelf when you’re ready.';
+    toast(msg, false, () => {
       state.thoughts = state.thoughts.filter((x) => x.id !== t.id);
       save(); render();
       capText.value = text; onCapInput(); capText.focus();
@@ -264,7 +271,7 @@
       </button>`;
     if (t.tags.length || isTodo) {
       h += `<div class="cfoot"><div class="ctags">${t.tags.map((x) => `<button type="button" class="ctag" data-tag="${esc(x)}">#${esc(x)}</button>`).join('')}</div>`;
-      if (isTodo && notionOn()) h += notionPill(t);
+      if (isTodo && syncOn()) h += notionPill(t);
       if (isTodo) h += `<button type="button" class="tick" data-tick="${esc(t.id)}" aria-pressed="${t.done}" aria-label="${t.done ? 'Mark as not done' : 'Mark as done'}" title="${t.done ? 'Done. Tap to undo' : 'Mark as done'}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg></button>`;
       h += `</div>`;
     }
@@ -280,7 +287,12 @@
   function notionPill(t) {
     const n = t.notion;
     if (!n) return `<button type="button" class="npill" data-notion="${esc(t.id)}">Send to Notion</button>`;
-    if (n === 'pending') return `<span class="npill wait">Sending to Notion…</span>`;
+    if (n === 'pending') {
+      const st = notionState();
+      if (st === 'old') return `<span class="npill bad" title="In Apps Script: Deploy → Manage deployments → ✏️ → New version → Deploy">Waiting: update your Google script</span>`;
+      if (st === 'off') return `<span class="npill bad" title="Add NOTION_TOKEN and NOTION_DATABASE_ID in Apps Script → Project Settings → Script properties">Waiting: Notion isn’t set up yet</span>`;
+      return `<span class="npill wait">Sending to Notion…</span>`;
+    }
     if (n.startsWith('error')) return `<button type="button" class="npill bad" data-notion="${esc(t.id)}" title="${esc(n.replace(/^error:\s*/, ''))}">Didn’t reach Notion · try again</button>`;
     return `<a class="npill in" href="https://www.notion.so/${esc(n.replace(/-/g, ''))}" target="_blank" rel="noopener">In Notion ↗</a>`;
   }
@@ -614,7 +626,7 @@
   const SHELF_SYNCED_KEY = 'tv-shelves-synced';
   const PASS_KEY = 'tv-pass';
   const LAST_KEY = 'tv-last-sync';
-  const NOTION_KEY = 'tv-notion-on';
+  const NOTION_KEY = 'tv-notion-state'; // 'on' · 'off' (script has no Notion settings) · 'old' (script needs a new version)
   const sync = {
     pass: API ? store.get(PASS_KEY, '') : '',
     synced: store.get(SYNCED_KEY, {}) || {},
@@ -623,7 +635,8 @@
   };
   function syncOn() { return !!API && !!sync.pass; }
   // The Sheet says whether Notion is set up; remembered so the buttons show straight away next time.
-  function notionOn() { return syncOn() && store.get(NOTION_KEY, false) === true; }
+  function notionState() { return syncOn() ? store.get(NOTION_KEY, '') : ''; }
+  function notionOn() { return notionState() === 'on'; }
   function isLocked() { return !!API && !sync.pass; }
   function syncSoon(ms) { if (!syncOn()) return; clearTimeout(sync.timer); sync.timer = setTimeout(runSync, ms == null ? 1200 : ms); }
 
@@ -685,7 +698,8 @@
 
   function mergeFromSheet(r, sentShelfUpd) {
     let changed = false;
-    if (!!r.notion !== notionOn()) { store.set(NOTION_KEY, !!r.notion); changed = true; }
+    const ns = r.notion === true ? 'on' : ('notion' in r ? 'off' : 'old');
+    if (ns !== store.get(NOTION_KEY, '')) { store.set(NOTION_KEY, ns); changed = true; }
     // Shelves first, so thoughts on a shelf made on another device keep their shelf.
     const sh = r.shelves;
     if (sh && Array.isArray(sh.list) && sh.updated > store.get(SHELF_UPD_KEY, '')) {
@@ -740,6 +754,7 @@
     const b = $('#syncBtn');
     if (!API) { b.hidden = true; return; }
     b.hidden = false;
+    $('#capNotionWrap').hidden = !syncOn();
     b.classList.toggle('offline', s === 'offline');
     b.textContent = isLocked() ? 'Unlock'
       : s === 'syncing' ? 'Syncing…'
@@ -754,6 +769,11 @@
     let txt = `Your thoughts are kept in your private Google Sheet, so every device you unlock sees the same ones. Last synced: ${when}.`;
     if (sync.status === 'offline') txt += sync.error ? ` The last try didn’t work: ${sync.error}` : ' I can’t reach Google right now, so I’ll keep trying. Nothing is lost: it’s all saved on this device too.';
     if (n) txt += ` ${n} change${n === 1 ? '' : 's'} still to send.`;
+    const st = notionState();
+    txt += st === 'on' ? ' Notion: connected ✓'
+      : st === 'off' ? ' Notion: not set up yet. Add NOTION_TOKEN and NOTION_DATABASE_ID under Apps Script → Project Settings → Script properties, then deploy a new version.'
+      : st === 'old' ? ' Notion: your Google script is still on an older version. In Apps Script, click Deploy → Manage deployments → ✏️ → Version: New version → Deploy, then tap Sync now.'
+      : '';
     $('#syncText').textContent = txt;
   }
 
@@ -867,6 +887,10 @@
   $('#fileBtn').addEventListener('click', fileThought);
   $('#capShelf').addEventListener('change', () => { cap.touchedShelf = true; });
   $('#capKind').addEventListener('change', () => { cap.touchedKind = true; });
+  // Everything in Notion's Command Centre is a task, so ticking Send to Notion makes it a To do.
+  $('#capNotion').addEventListener('change', (e) => {
+    if (e.target.checked && $('#capKind').value !== 'todo') { $('#capKind').value = 'todo'; cap.touchedKind = true; }
+  });
   $('#shelvesBtn').addEventListener('click', openShelves);
   $('#backupBtn').addEventListener('click', () => { $('#backupMsg').textContent = ''; showDialog($('#backupDlg')); });
   $('#fab').addEventListener('click', () => { capText.scrollIntoView({ behavior: 'smooth', block: 'center' }); capText.focus({ preventScroll: true }); });

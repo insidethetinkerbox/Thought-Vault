@@ -114,7 +114,9 @@ button.tile:hover { background: var(--cream); }
 .sel select { border: 0; background: transparent; font-weight: 600; font-size: 13px; color: var(--navy); cursor: pointer; padding: 0 2px; max-width: 200px; }
 .sel select:focus { outline: none; }
 .sel:focus-within { outline: 3px solid var(--blue); outline-offset: 2px; }
-.capture-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.capture-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
+.ncheck { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; margin-right: auto; font-size: 14px; font-weight: 600; cursor: pointer; }
+.ncheck input { width: 20px; height: 20px; accent-color: var(--navy); }
 .capture-actions .primary { min-width: 160px; }
 .btn.rec { background: var(--orange); color: #fff; border-color: var(--orange); }
 
