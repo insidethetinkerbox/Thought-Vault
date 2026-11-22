@@ -205,7 +205,9 @@ dialog::backdrop { background: rgba(20, 40, 63, .55); }
 .hint { margin: 0; color: var(--navy); }
 .confirm-text { margin: 0; font-size: 17px; font-weight: 600; }
 #confirmDlg { width: min(440px, calc(100% - 32px)); height: fit-content; margin: auto; }
-#backupDlg .btn { width: 100%; }
+#backupDlg .btn, #syncDlg .btn { width: 100%; }
+.btn.sync.offline { border-color: var(--orange); color: var(--orange); }
+.empty .btn { margin-top: 14px; }
 
 /* Shelves editor */
 .shelf-rows { display: flex; flex-direction: column; gap: 10px; }

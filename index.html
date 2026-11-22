@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<!-- Browser safety rules: only this site's own scripts may run, and nothing is sent anywhere. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'">
+<!-- Browser safety rules: only this site's own scripts may run, and data may only be sent to your own Google script. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://script.google.com https://script.googleusercontent.com; object-src 'none'; base-uri 'none'">
 <meta name="referrer" content="strict-origin-when-cross-origin">
 <title>Thought Vault</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23ffcc00'/%3E%3Cpath d='M9 13a7 7 0 1 1 10 6.3V22h-6v-2.7A7 7 0 0 1 9 13z' fill='none' stroke='%2314283f' stroke-width='2.5' stroke-linejoin='round'/%3E%3Cpath d='M13 25.5h6' stroke='%2314283f' stroke-width='2.5' stroke-linecap='round'/%3E%3C/svg%3E">
@@ -14,7 +14,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Libre+Franklin:wght@400;600;900&display=swap">
 <!-- The ?v= number changes with each update, so browsers fetch the new file instead of an old saved copy. -->
-<link rel="stylesheet" href="style.css?v=20261122b">
+<link rel="stylesheet" href="style.css?v=20261122c">
 </head>
 <body>
 <div class="wrap">
@@ -24,6 +24,7 @@
       <h1>Thought Vault</h1>
     </div>
     <div class="actions">
+      <button id="syncBtn" class="btn sync" type="button" hidden>Unlock</button>
       <button id="shelvesBtn" class="btn" type="button">Shelves</button>
       <button id="backupBtn" class="btn" type="button">Backup</button>
     </div>
@@ -133,12 +134,39 @@
       <h2 id="backupTitle">Backup</h2>
       <button type="button" class="close" data-close aria-label="Close"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
     </div>
-    <p class="hint">Your thoughts live in this browser on this device. Nothing is sent anywhere. Download a backup now and then, and use it to move your thoughts to another phone or computer.</p>
+    <p class="hint" id="backupHint">Your thoughts live in this browser on this device. Nothing is sent anywhere. Download a backup now and then, and use it to move your thoughts to another phone or computer.</p>
     <button type="button" id="dlJson" class="btn primary">Download backup file</button>
     <button type="button" id="dlMd" class="btn">Download as a readable Markdown file</button>
     <label class="btn" for="restoreFile">Restore from a backup file…</label>
     <input id="restoreFile" type="file" accept=".json,application/json" class="sr">
     <p id="backupMsg" class="msg" role="status"></p>
+  </div>
+</dialog>
+
+<!-- Unlock: the passcode that opens your Google Sheet -->
+<dialog id="unlockDlg" aria-labelledby="unlockTitle">
+  <form id="unlockForm" class="sheet-body form">
+    <div class="form-head">
+      <h2 id="unlockTitle">Unlock</h2>
+      <button type="button" class="close" data-close aria-label="Close"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    </div>
+    <p class="hint">Enter your passcode to see your thoughts and keep them in step with your other devices. This device remembers it until you lock it again.</p>
+    <label>Passcode<input id="passInput" type="password" autocomplete="current-password" required></label>
+    <p id="unlockMsg" class="msg bad" role="alert"></p>
+    <div class="form-actions"><button type="submit" class="btn primary">Unlock</button></div>
+  </form>
+</dialog>
+
+<!-- Sync status -->
+<dialog id="syncDlg" aria-labelledby="syncTitle">
+  <div class="sheet-body form">
+    <div class="form-head">
+      <h2 id="syncTitle">Sync</h2>
+      <button type="button" class="close" data-close aria-label="Close"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    </div>
+    <p class="hint" id="syncText"></p>
+    <button type="button" id="syncNowBtn" class="btn primary">Sync now</button>
+    <button type="button" id="lockBtn" class="btn">Lock this device</button>
   </div>
 </dialog>
 
@@ -156,7 +184,8 @@
 
 <datalist id="allTags"></datalist>
 
-<script src="tagger.js?v=20261122b"></script>
-<script src="app.js?v=20261122b"></script>
+<script src="config.js?v=20261122c"></script>
+<script src="tagger.js?v=20261122c"></script>
+<script src="app.js?v=20261122c"></script>
 </body>
 </html>

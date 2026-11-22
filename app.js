@@ -1,4 +1,5 @@
-// Thought Vault. Plain JavaScript, no build step, no server: thoughts are saved in this browser.
+// Thought Vault. Plain JavaScript, no build step. Thoughts are saved in this browser and, once connected,
+// kept in step with your private Google Sheet so every device sees the same thoughts.
 (function () {
   'use strict';
   const T = window.Tagger;
@@ -8,9 +9,11 @@
   // ---------- Saving in this browser ----------
   const KEY = 'tv-thoughts';
   const SHELF_KEY = 'tv-shelves';
+  const SHELF_UPD_KEY = 'tv-shelves-updated';
   const store = {
     get(k, fallback) { try { const v = localStorage.getItem(k); return v == null ? fallback : JSON.parse(v); } catch { return fallback; } },
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } },
+    del(k) { try { localStorage.removeItem(k); } catch {} },
   };
 
   const state = {
@@ -33,8 +36,14 @@
     const ok = store.set(KEY, state.thoughts);
     if (!ok) toast('I couldn’t save to this browser. Is it in private browsing mode?', true);
     derive();
+    syncSoon();
   }
-  function saveShelves() { store.set(SHELF_KEY, state.shelves.map(({ _kw, ...s }) => s)); }
+  function plainShelves() { return state.shelves.map(({ _kw, ...s }) => s); }
+  // changed = true when I edited the shelves here; false when they've just arrived from the Sheet.
+  function saveShelves(changed = true) {
+    store.set(SHELF_KEY, plainShelves());
+    if (changed) { store.set(SHELF_UPD_KEY, now()); syncSoon(); }
+  }
 
   // Things worked out from the thoughts: the learned word model and how often each tag is used.
   function derive() {
@@ -274,6 +283,10 @@
 
   function renderLibrary() {
     const lib = $('#library');
+    if (isLocked()) {
+      lib.innerHTML = `<div class="empty"><b>Your Vault is locked on this device</b>Enter your passcode to see your thoughts. You can still dump a thought in the box above: it’s added to your Vault once you unlock.<br><button type="button" class="btn primary" data-unlock>Unlock</button></div>`;
+      return;
+    }
     if (!state.thoughts.length) {
       lib.innerHTML = `<div class="empty"><b>Nothing in here yet</b>Pop your first thought in the box above. Half-baked is fine: the Vault puts it on a shelf, works out whether it’s an idea, a to-do or a question, and adds a few tags for you.</div>`;
       return;
@@ -295,6 +308,7 @@
 
   // ---------- Library clicks ----------
   $('#library').addEventListener('click', (e) => {
+    if (e.target.closest('[data-unlock]')) { openUnlock(); return; }
     const shelve = e.target.closest('[data-shelve]');
     if (shelve) {
       const t = state.thoughts.find((x) => x.id === shelve.dataset.shelve);
@@ -417,7 +431,7 @@
     t.archived = !t.archived; t.updated = now();
     save(); render();
     $('#detail').close();
-    toast(t.archived ? 'Put away. Find it under “Put away”.' : 'Brought back', false, () => { t.archived = !t.archived; save(); render(); });
+    toast(t.archived ? 'Put away. Find it under “Put away”.' : 'Brought back', false, () => { t.archived = !t.archived; t.updated = now(); save(); render(); });
   });
 
   $('#deleteBtn').addEventListener('click', async () => {
@@ -478,7 +492,7 @@
     if (clean.some((s) => !s.name)) { toast('Every shelf needs a name', true); return; }
     state.shelves = clean;
     const ids = new Set(clean.map((s) => s.id));
-    for (const t of state.thoughts) if (t.shelf && !ids.has(t.shelf)) { t.shelf = ''; t.shelfBy = 'auto'; }
+    for (const t of state.thoughts) if (t.shelf && !ids.has(t.shelf)) { t.shelf = ''; t.shelfBy = 'auto'; t.updated = now(); }
     saveShelves(); save();
     fillShelfSelect($('#capShelf'));
     updateCapSuggest();
@@ -571,6 +585,222 @@
     });
   }
 
+
+  // ---------- Sync with your private Google Sheet ----------
+  // Each device keeps its own copy, so the Vault opens instantly and works offline.
+  // Changes are sent to the Sheet in the background; for each thought, the newer version wins.
+  const API = String((window.TV_CONFIG && window.TV_CONFIG.API_URL) || '').trim();
+  const SYNCED_KEY = 'tv-synced';          // id → the version this device last agreed with the Sheet
+  const SHELF_SYNCED_KEY = 'tv-shelves-synced';
+  const PASS_KEY = 'tv-pass';
+  const LAST_KEY = 'tv-last-sync';
+  const sync = {
+    pass: API ? store.get(PASS_KEY, '') : '',
+    synced: store.get(SYNCED_KEY, {}) || {},
+    busy: false, again: false, timer: 0, retries: 0,
+    status: 'idle', last: store.get(LAST_KEY, ''), error: '',
+  };
+  function syncOn() { return !!API && !!sync.pass; }
+  function isLocked() { return !!API && !sync.pass; }
+  function syncSoon(ms) { if (!syncOn()) return; clearTimeout(sync.timer); sync.timer = setTimeout(runSync, ms == null ? 1200 : ms); }
+
+  // Sent as plain text so the browser makes a simple request that Google accepts. Gives up after a minute.
+  async function post(body) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 60000);
+    try {
+      const r = await fetch(API, { method: 'POST', body: JSON.stringify(body), signal: ctrl.signal });
+      return await r.json();
+    } catch {
+      const err = new Error('No connection'); err.network = true; throw err;
+    } finally { clearTimeout(timer); }
+  }
+
+  // What this device has that the Sheet doesn't: new or changed thoughts, and thoughts deleted here.
+  function pending() {
+    const out = state.thoughts.filter((t) => sync.synced[t.id] !== t.updated);
+    const here = new Set(state.thoughts.map((t) => t.id));
+    for (const id of Object.keys(sync.synced)) if (!here.has(id)) out.push({ id, deleted: true, updated: now() });
+    return out;
+  }
+  function shelvesPending() {
+    const upd = store.get(SHELF_UPD_KEY, '');
+    return upd && upd !== store.get(SHELF_SYNCED_KEY, '') ? upd : '';
+  }
+
+  async function runSync() {
+    if (!syncOn()) return;
+    if (sync.busy) { sync.again = true; return; }
+    clearTimeout(sync.timer);
+    sync.busy = true;
+    setSyncStatus('syncing');
+    const sent = pending();
+    const shelfUpd = shelvesPending();
+    try {
+      const r = await post({ action: 'sync', passcode: sync.pass, thoughts: sent, shelves: shelfUpd ? { list: plainShelves(), updated: shelfUpd } : null });
+      if (!r || !r.ok) { const e = new Error((r && r.error) || 'Sync didn’t work.'); e.badPass = !!(r && r.badPasscode); throw e; }
+      mergeFromSheet(r, shelfUpd);
+      sync.retries = 0; sync.error = '';
+      sync.last = now(); store.set(LAST_KEY, sync.last);
+      setSyncStatus('done');
+    } catch (e) {
+      if (e.badPass) {
+        forgetPasscode();
+        toast('That passcode doesn’t work any more. Unlock again to keep syncing.', true);
+        render();
+      } else {
+        sync.error = e.network ? '' : e.message;
+        setSyncStatus('offline');
+        const wait = [5, 15, 30, 60][Math.min(sync.retries++, 3)];
+        sync.timer = setTimeout(runSync, wait * 1000);
+      }
+    } finally {
+      sync.busy = false;
+      if (sync.again) { sync.again = false; syncSoon(300); }
+    }
+  }
+
+  function mergeFromSheet(r, sentShelfUpd) {
+    let changed = false;
+    // Shelves first, so thoughts on a shelf made on another device keep their shelf.
+    const sh = r.shelves;
+    if (sh && Array.isArray(sh.list) && sh.updated > store.get(SHELF_UPD_KEY, '')) {
+      const list = sh.list.filter((x) => x && x.id && x.name).map((x) => ({ id: String(x.id), name: String(x.name), short: String(x.short || ''), words: String(x.words || '') }));
+      if (list.length) {
+        state.shelves = list;
+        saveShelves(false);
+        store.set(SHELF_UPD_KEY, sh.updated);
+        store.set(SHELF_SYNCED_KEY, sh.updated);
+        fillShelfSelect($('#capShelf'));
+        changed = true;
+      }
+    } else if (sentShelfUpd && store.get(SHELF_UPD_KEY, '') === sentShelfUpd) {
+      store.set(SHELF_SYNCED_KEY, sentShelfUpd);
+    }
+
+    const before = sync.synced;
+    const next = {};
+    const byId = new Map(state.thoughts.map((t) => [t.id, t]));
+    for (const s of Array.isArray(r.thoughts) ? r.thoughts : []) {
+      const id = String(s.id || '');
+      if (!id) continue;
+      const local = byId.get(id);
+      if (s.deleted) {
+        if (local && !(local.updated > s.updated)) { state.thoughts = state.thoughts.filter((t) => t.id !== id); changed = true; }
+        continue;
+      }
+      next[id] = s.updated;
+      if (!local) {
+        if (before[id]) continue; // deleted here while that sync was on its way; the delete goes next time
+        state.thoughts.push(normalise(s));
+        changed = true;
+      } else if (s.updated > local.updated) {
+        Object.assign(local, normalise(s));
+        changed = true;
+      }
+      // If this device changed it in the meantime, its newer version is sent next time.
+    }
+    sync.synced = next;
+    store.set(SYNCED_KEY, next);
+    if (changed) {
+      store.set(KEY, state.thoughts);
+      derive();
+      render();
+      if ($('#detail').open && editing && !state.thoughts.includes(editing)) $('#detail').close();
+    }
+    if (pending().length || shelvesPending()) syncSoon(500);
+  }
+
+  function setSyncStatus(s) {
+    sync.status = s;
+    const b = $('#syncBtn');
+    if (!API) { b.hidden = true; return; }
+    b.hidden = false;
+    b.classList.toggle('offline', s === 'offline');
+    b.textContent = isLocked() ? 'Unlock'
+      : s === 'syncing' ? 'Syncing…'
+      : s === 'offline' ? 'Offline · will sync'
+      : 'Synced ✓';
+    if ($('#syncDlg').open) renderSyncDialog();
+  }
+
+  function renderSyncDialog() {
+    const n = pending().length;
+    const when = sync.last ? new Date(sync.last).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }) : 'not yet';
+    let txt = `Your thoughts are kept in your private Google Sheet, so every device you unlock sees the same ones. Last synced: ${when}.`;
+    if (sync.status === 'offline') txt += sync.error ? ` The last try didn’t work: ${sync.error}` : ' I can’t reach Google right now, so I’ll keep trying. Nothing is lost: it’s all saved on this device too.';
+    if (n) txt += ` ${n} change${n === 1 ? '' : 's'} still to send.`;
+    $('#syncText').textContent = txt;
+  }
+
+  function forgetPasscode() {
+    sync.pass = '';
+    store.del(PASS_KEY);
+    setSyncStatus('idle');
+  }
+
+  function openUnlock() {
+    $('#passInput').value = '';
+    $('#unlockMsg').textContent = '';
+    showDialog($('#unlockDlg'));
+    setTimeout(() => $('#passInput').focus(), 50);
+  }
+
+  $('#unlockForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const pass = $('#passInput').value.trim();
+    if (!pass) return;
+    const btn = e.target.querySelector('[type="submit"]');
+    btn.disabled = true;
+    $('#unlockMsg').textContent = '';
+    try {
+      const r = await post({ action: 'check', passcode: pass });
+      if (!r || !r.ok) throw new Error((r && r.error) || 'That didn’t work. Try again.');
+      sync.pass = pass;
+      store.set(PASS_KEY, pass);
+      $('#unlockDlg').close();
+      render();
+      toast('Unlocked. Fetching your thoughts…');
+      await runSync();
+    } catch (err) {
+      $('#unlockMsg').textContent = err.network ? 'I couldn’t reach Google. Check your connection and try again.' : err.message;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  $('#syncBtn').addEventListener('click', () => {
+    if (isLocked()) { openUnlock(); return; }
+    renderSyncDialog();
+    showDialog($('#syncDlg'));
+  });
+  $('#syncNowBtn').addEventListener('click', () => runSync());
+  $('#lockBtn').addEventListener('click', async () => {
+    if (syncOn()) await runSync();
+    const n = pending().length;
+    const msg = n
+      ? `${n} change${n === 1 ? ' hasn’t' : 's haven’t'} reached your Google Sheet yet, and locking now would lose ${n === 1 ? 'it' : 'them'}. Lock anyway?`
+      : 'Lock this device? Your thoughts stay safe in your Google Sheet. This device forgets them, and the passcode, until you unlock it again.';
+    if (!(await ask(msg, 'Lock', n > 0))) return;
+    $('#syncDlg').close();
+    forgetPasscode();
+    state.thoughts = [];
+    sync.synced = {};
+    store.del(KEY); store.del(SYNCED_KEY); store.del(LAST_KEY);
+    sync.last = '';
+    derive();
+    render();
+    toast('Locked. Unlock with your passcode to see your thoughts again.');
+  });
+
+  if (API) {
+    $('#backupHint').textContent = 'Your thoughts are kept in your private Google Sheet, which is your main backup. You can also download a copy here, or restore one: a restore only adds and updates, and never deletes anything.';
+    // Catch up whenever you come back to the Vault, come back online, and every minute while it's open.
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') syncSoon(0); });
+    window.addEventListener('online', () => syncSoon(0));
+    setInterval(() => { if (document.visibilityState === 'visible') runSync(); }, 60000);
+  }
+
   // ---------- Dialogs, confirm, toast ----------
   function showDialog(d) { if (!d.open) d.showModal(); }
   document.addEventListener('click', (e) => {
@@ -638,4 +868,7 @@
   fillKindSelect($('#capKind'));
   resetCapture();
   render();
+  setSyncStatus('idle');
+  if (syncOn()) runSync();
+  else if (isLocked()) openUnlock();
 })();
