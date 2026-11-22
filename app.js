@@ -21,7 +21,7 @@
     shelves: [],
     model: null,
     tagCounts: {},
-    f: { q: '', kind: 'all', shelf: 'all', tag: '', pinned: false, archived: false },
+    f: { q: '', kind: 'all', shelf: 'all', tag: '', pinned: false, archived: false, done: false },
   };
 
   function uid() { return 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
@@ -52,6 +52,17 @@
     for (const t of state.thoughts) if (!t.archived) for (const tag of t.tags) counts[tag] = (counts[tag] || 0) + 1;
     state.tagCounts = counts;
     $('#allTags').innerHTML = Object.keys(counts).sort().map((t) => `<option value="${esc(t)}">`).join('');
+  }
+
+  // Ticked to-dos stay on their shelf for a few days, then are put away by themselves.
+  const PUT_AWAY_DAYS = 3;
+  function putAwayOldDone() {
+    const cutoff = Date.now() - PUT_AWAY_DAYS * 864e5;
+    let n = 0;
+    for (const t of state.thoughts) {
+      if (t.kind === 'todo' && t.done && !t.archived && Date.parse(t.updated) < cutoff) { t.archived = true; t.updated = now(); n++; }
+    }
+    return n;
   }
 
   function analyse(text) { return T.analyse(text, { shelves: state.shelves, model: state.model, tagCounts: state.tagCounts }); }
@@ -175,7 +186,8 @@
     const f = state.f;
     const words = f.q.toLowerCase().split(/\s+/).filter(Boolean);
     return state.thoughts.filter((t) => {
-      if (f.archived ? !t.archived : t.archived) return false;
+      if (f.done) { if (!(t.kind === 'todo' && t.done)) return false; } // finished to-dos, put away or not
+      else if (f.archived ? !t.archived : t.archived) return false;
       if (f.pinned && !t.pinned) return false;
       if (f.kind !== 'all' && t.kind !== f.kind) return false;
       if (f.shelf !== 'all' && t.shelf !== f.shelf) return false;
@@ -207,7 +219,7 @@
     const ideas = live.filter((t) => t.kind === 'idea').length;
     const unsorted = live.filter((t) => !t.shelf).length;
     const f = state.f;
-    const plain = f.kind === 'all' && f.shelf === 'all' && !f.tag && !f.pinned && !f.archived && !f.q;
+    const plain = f.kind === 'all' && f.shelf === 'all' && !f.tag && !f.pinned && !f.archived && !f.done && !f.q;
     $('#stats').innerHTML =
       tile('Thoughts', live.length, '', plain, 'all') +
       tile('To do · open', open, '', f.kind === 'todo', 'todo') +
@@ -229,6 +241,8 @@
     for (const k of T.KINDS) h += `<button type="button" class="chip" data-kind="${k.id}" aria-pressed="${f.kind === k.id}">${esc(k.plural)} <span class="c">${count(k.id)}</span></button>`;
     h += `<span class="sep" aria-hidden="true"></span>`;
     h += `<button type="button" class="chip" data-flag="pinned" aria-pressed="${f.pinned}">Pinned</button>`;
+    const doneCount = state.thoughts.filter((t) => t.kind === 'todo' && t.done).length;
+    h += `<button type="button" class="chip" data-flag="done" aria-pressed="${f.done}">Done <span class="c">${doneCount}</span></button>`;
     h += `<button type="button" class="chip" data-flag="archived" aria-pressed="${f.archived}">Put away <span class="c">${state.thoughts.length - live.length}</span></button>`;
     if (f.tag) h += `<button type="button" class="chip tagf" data-cleartag aria-label="Stop filtering by tag ${esc(f.tag)}">#${esc(f.tag)} ×</button>`;
     $('#chips').innerHTML = h;
@@ -356,8 +370,9 @@
       const t = state.thoughts.find((x) => x.id === tick.dataset.tick);
       if (!t) return;
       t.done = !t.done; t.updated = now();
+      if (!t.done) t.archived = false; // unticked: back on its shelf as an open to-do
       save(); render();
-      if (t.done) toast(t.notion && /^[0-9a-f-]{32,36}$/i.test(t.notion) ? 'Done. Ticked in Notion too.' : 'Done. Nice one.');
+      if (t.done) toast((t.notion && /^[0-9a-f-]{32,36}$/i.test(t.notion) ? 'Done, and ticked in Notion too.' : 'Done. Nice one.') + ` I’ll put it away in ${PUT_AWAY_DAYS} days.`);
       return;
     }
     const tag = e.target.closest('[data-tag]');
@@ -371,9 +386,9 @@
     if (!b) return;
     const f = state.f;
     const k = b.dataset.tile;
-    if (k === 'all') Object.assign(f, { q: '', kind: 'all', shelf: 'all', tag: '', pinned: false, archived: false });
-    else if (k === 'unsorted') { f.shelf = f.shelf === '' ? 'all' : ''; f.archived = false; }
-    else { f.kind = f.kind === k ? 'all' : k; f.archived = false; }
+    if (k === 'all') Object.assign(f, { q: '', kind: 'all', shelf: 'all', tag: '', pinned: false, archived: false, done: false });
+    else if (k === 'unsorted') { f.shelf = f.shelf === '' ? 'all' : ''; f.archived = false; f.done = false; }
+    else { f.kind = f.kind === k ? 'all' : k; f.archived = false; f.done = false; }
     if (k === 'all') $('#search').value = '';
     render();
   });
@@ -382,7 +397,13 @@
     const b = e.target.closest('button');
     if (!b) return;
     if (b.dataset.kind) state.f.kind = b.dataset.kind;
-    else if (b.dataset.flag) state.f[b.dataset.flag] = !state.f[b.dataset.flag];
+    else if (b.dataset.flag) {
+      const flag = b.dataset.flag;
+      state.f[flag] = !state.f[flag];
+      // Done and Put away are two different lists, so only one at a time.
+      if (flag === 'done' && state.f.done) state.f.archived = false;
+      if (flag === 'archived' && state.f.archived) state.f.done = false;
+    }
     else if ('cleartag' in b.dataset) state.f.tag = '';
     render();
   });
@@ -444,6 +465,7 @@
     const pending = $('#d-tags .tag-add');
     if (pending && T.slug(pending.value)) dTags.push(T.slug(pending.value));
     const shelf = $('input[name="d-shelf"]:checked').value;
+    const wasDone = editing.done;
     Object.assign(editing, {
       text, shelf, shelfBy: shelf ? 'you' : 'auto',
       kind: $('input[name="d-kind"]:checked').value,
@@ -452,6 +474,7 @@
       done: $('#d-done').checked,
       updated: now(),
     });
+    if (wasDone && !editing.done) editing.archived = false;
     save(); render();
     $('#detail').close();
     toast('Saved');
@@ -733,13 +756,17 @@
         state.thoughts.push(normalise(s));
         changed = true;
       } else if (s.updated > local.updated) {
+        const wasDone = local.done;
         Object.assign(local, normalise(s));
+        // Unticked in Notion (or on another device) after it was put away: bring it back as an open to-do.
+        if (wasDone && !local.done && local.archived && local.kind === 'todo') { local.archived = false; local.updated = now(); }
         changed = true;
       }
       // If this device changed it in the meantime, its newer version is sent next time.
     }
     sync.synced = next;
     store.set(SYNCED_KEY, next);
+    if (putAwayOldDone()) changed = true;
     if (changed) {
       store.set(KEY, state.thoughts);
       derive();
@@ -922,6 +949,8 @@
   fillShelfSelect($('#capShelf'));
   fillKindSelect($('#capKind'));
   resetCapture();
+  if (putAwayOldDone()) save();
+  setInterval(() => { if (putAwayOldDone()) { save(); render(); } }, 3600e3);
   render();
   setSyncStatus('idle');
   if (syncOn()) runSync();
